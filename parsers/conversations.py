@@ -127,7 +127,6 @@ def parse_split(authors_ids):
                 conv_update = list(conversation)
                 conv_update[1] = last_added_null_author_id
                 conversation = tuple(conv_update)
-                print(last_added_null_author_id)
             if int(conversation[1]) in authors_ids:
                 parsed_conversations.append(conversation)
                 parsed_annotations.append(annotations)
