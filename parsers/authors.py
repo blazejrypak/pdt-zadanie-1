@@ -10,7 +10,7 @@ from logger import Logger
 
 # Connect to an existing database
 conn = psycopg2.connect(
-    "host=localhost port=5432 dbname=twitter user=postgres password=postgres")
+    "host=localhost port=5432 dbname=pdt_db user=postgres password=postgres")
 # Open a cursor to perform database operations
 cur = conn.cursor()
 

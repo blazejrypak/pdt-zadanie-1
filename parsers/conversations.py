@@ -3,6 +3,7 @@ import pprint
 import psycopg2
 import json
 from logger import Logger
+import itertools
 
 def not_null_str(param):
     if param:
@@ -69,7 +70,7 @@ def parse_hashtags(data):
     hashtags = []
     for hashtag in hashtags_data:
         hashtags.append(
-            hashtag['tag'],
+            not_null_str(hashtag['tag']),
         )
     return hashtags
 
@@ -82,17 +83,14 @@ def parse_referenced_tweets(data):
             (referenced_tweet['id'], not_null_str(referenced_tweet['type']), data['id']))
     return referenced_tweets
 
-
 def parse_split(authors_ids):
     # Connect to an existing database
     conn = psycopg2.connect(
-        "host=localhost port=5432 dbname=Twitter user=postgres password=postgres")
+        "host=localhost port=5432 dbname=pdt_db user=postgres password=postgres")
     # Open a cursor to perform database operations
     cur = conn.cursor()
     logger = Logger('report_file_conversations')
-    current_hashtag_id = 1
-    hashtags_dict = {}
-    all_hashtags = set()
+    hashtags_dict = dict()
     with gzip.open('../conversations.jsonl.gz', 'r') as file:
         parsed_conversations = []
         parsed_annotations = []
@@ -100,7 +98,8 @@ def parse_split(authors_ids):
         parsed_context_annotations_domains = []
         parsed_context_annotations_entities = []
         parsed_referenced_tweets = []
-        parsed_hashtags = []
+        new_added_hashtags = []
+        new_added_hashtags_conversations = []
         for line in file:
             data = json.loads(line)
             conversation = parse_conversation(data)
@@ -108,8 +107,8 @@ def parse_split(authors_ids):
             annotations = parse_annotations(data)
             context_annotations_domains, context_annotations_entities = parse_context_annotations(
                 data)
-            hashtags = parse_hashtags(data)
             referenced_tweets = parse_referenced_tweets(data)
+            hashtags = parse_hashtags(data)
             # existing foreign key on author_id
             if int(conversation[1]) in authors_ids:
                 parsed_conversations.append(conversation)
@@ -120,75 +119,66 @@ def parse_split(authors_ids):
                 parsed_context_annotations_entities.append(
                     (context_annotations_entities, conversation[0]))
                 parsed_referenced_tweets.append(referenced_tweets)
-                parsed_hashtags.append((conversation[0], hashtags))
+                for tag in hashtags:
+                    if tag not in hashtags_dict:
+                        hashtags_dict[tag] = len(hashtags_dict) + 1
+                        new_added_hashtags.append((hashtags_dict[tag], tag))
+                    new_added_hashtags_conversations.append((conversation[0], hashtags_dict[tag]))
 
-            if len(parsed_conversations) >= 100:
+            if len(parsed_conversations) >= 100000:
                 conversation_args = ','.join(cur.mogrify(
                     "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", x).decode("utf-8") for x in parsed_conversations)
                 if conversation_args:
                     cur.execute("INSERT INTO conversations (id, author_id, content, possibly_sensitive, language, source, retweet_count, reply_count, like_count, qoute_count, created_at) VALUES " +
-                                conversation_args + " ON CONFLICT DO NOTHING;")
+                                conversation_args + "  ON CONFLICT DO NOTHING;")
 
                     for pa in parsed_annotations:
                         annotations_args = ','.join(cur.mogrify(
                             "(%s,%s,%s,%s)", x).decode("utf-8") for x in pa)
                         if annotations_args:
                             cur.execute("INSERT INTO annotations (value, type, probability, conversation_id) VALUES " +
-                                        annotations_args + " ON CONFLICT DO NOTHING;")
+                                        annotations_args + "  ON CONFLICT DO NOTHING;")
 
                     for pl in parsed_links:
                         links_args = ','.join(cur.mogrify(
                             "(%s,%s,%s,%s)", x).decode("utf-8") for x in pl)
                         if links_args:
                             cur.execute("INSERT INTO links (url, title, description, conversation_id) VALUES " +
-                                        links_args + " ON CONFLICT DO NOTHING;")
-
-                    parsed_unique_hashtags = []
-                    conversations_hashtags = []
-                    for conversation_tags in parsed_hashtags:
-                        for tag in conversation_tags[1]:
-                            if tag not in all_hashtags:
-                                current_hashtag_id += 1
-                                hashtags_dict[tag] = current_hashtag_id
-                                parsed_unique_hashtags.append(
-                                    (current_hashtag_id, tag))
-                                all_hashtags.add(tag)
-                            conversations_hashtags.append(
-                                (conversation_tags[0], hashtags_dict[tag]))
-
-                    # pprint.pprint(parsed_unique_hashtags)
-                    hashtags_args = ','.join(cur.mogrify(
-                        "(%s,%s)", x).decode("utf-8") for x in parsed_unique_hashtags)
-
-                    if hashtags_args:
-                        cur.execute("INSERT INTO hashtags (id, tag) VALUES " +
-                                    hashtags_args + " ;")
-
-                    conversations_hashtags_args = ','.join(cur.mogrify(
-                        "(%s,%s)", x).decode("utf-8") for x in conversations_hashtags)
-
-                    if conversations_hashtags_args:
-                        cur.execute("INSERT INTO conversation_hashtags (conversation_id, hashtag_id) VALUES " +
-                                    conversations_hashtags_args + " ;")
+                                        links_args + "  ON CONFLICT DO NOTHING;")
 
                     for prt in parsed_referenced_tweets:
                         referenced_tweets_args = ','.join(cur.mogrify(
                             "(%s,%s,%s)", x).decode("utf-8") for x in prt)
                         if referenced_tweets_args:
                             cur.execute("INSERT INTO conversation_references (parent_id, type, conversation_id) VALUES " +
-                                        referenced_tweets_args + " ON CONFLICT DO NOTHING;")
+                                        referenced_tweets_args + "  ON CONFLICT DO NOTHING;")
+
+                    hashtags_args = ','.join(cur.mogrify(
+                        "(%s,%s)", x).decode("utf-8") for x in new_added_hashtags)
+
+                    if hashtags_args:
+                        cur.execute("INSERT INTO hashtags (id, tag) VALUES " +
+                                    hashtags_args + " ON CONFLICT DO NOTHING;")
+
+                    conversations_hashtags_args = ','.join(cur.mogrify(
+                        "(%s,%s)", x).decode("utf-8") for x in new_added_hashtags_conversations)
+
+                    if conversations_hashtags_args:
+                        cur.execute("INSERT INTO conversation_hashtags (conversation_id, hashtag_id) VALUES " +
+                                    conversations_hashtags_args + " ON CONFLICT DO NOTHING;")
+
 
                     for pcad, pcae in zip(parsed_context_annotations_domains, parsed_context_annotations_entities):
                         context_annotations_domains_args = ','.join(cur.mogrify(
                             "(%s,%s,%s)", (x[0], x[1], x[2])).decode("utf-8") for x in pcad[0])
                         if context_annotations_domains_args:
                             cur.execute("INSERT INTO context_domains (id, name, description) VALUES " +
-                                        context_annotations_domains_args + " ON CONFLICT DO NOTHING;")
+                                        context_annotations_domains_args + "  ON CONFLICT DO NOTHING;")
                         context_annotations_entities_args = ','.join(cur.mogrify(
                             "(%s,%s,%s)", (x[0], x[1], x[2])).decode("utf-8") for x in pcae[0])
                         if context_annotations_entities_args:
                             cur.execute("INSERT INTO context_entities (id, name, description) VALUES " +
-                                        context_annotations_entities_args + " ON CONFLICT DO NOTHING;")
+                                        context_annotations_entities_args + "  ON CONFLICT DO NOTHING;")
 
                         values = []
                         for a, b in zip(pcad[0], pcae[0]):
@@ -197,7 +187,7 @@ def parse_split(authors_ids):
                             "(%s,%s,%s)", x).decode("utf-8") for x in values)
                         if values_args:
                             cur.execute("INSERT INTO context_annotations (conversation_id, context_domain_id, context_entity_id) VALUES " +
-                                        values_args + " ON CONFLICT DO NOTHING;")
+                                        values_args + "  ON CONFLICT DO NOTHING;")
                     conn.commit()
                     logger.log()
 
@@ -207,76 +197,62 @@ def parse_split(authors_ids):
                 parsed_context_annotations_domains = []
                 parsed_context_annotations_entities = []
                 parsed_referenced_tweets = []
-                parsed_hashtags = []
+                new_added_hashtags = []
+                new_added_hashtags_conversations = []
 
         if len(parsed_conversations):
             conversation_args = ','.join(cur.mogrify(
                 "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", x).decode("utf-8") for x in parsed_conversations)
             if conversation_args:
                 cur.execute("INSERT INTO conversations (id, author_id, content, possibly_sensitive, language, source, retweet_count, reply_count, like_count, qoute_count, created_at) VALUES " +
-                            conversation_args + " ON CONFLICT DO NOTHING;")
+                            conversation_args + "  ON CONFLICT DO NOTHING;")
 
                 for pa in parsed_annotations:
                     annotations_args = ','.join(cur.mogrify(
                         "(%s,%s,%s,%s)", x).decode("utf-8") for x in pa)
                     if annotations_args:
                         cur.execute("INSERT INTO annotations (value, type, probability, conversation_id) VALUES " +
-                                    annotations_args + " ON CONFLICT DO NOTHING;")
+                                    annotations_args + "  ON CONFLICT DO NOTHING;")
 
                 for pl in parsed_links:
                     links_args = ','.join(cur.mogrify(
                         "(%s,%s,%s,%s)", x).decode("utf-8") for x in pl)
                     if links_args:
                         cur.execute("INSERT INTO links (url, title, description, conversation_id) VALUES " +
-                                    links_args + " ON CONFLICT DO NOTHING;")
-
-                parsed_unique_hashtags = []
-                conversations_hashtags = []
-                for conversation_tags in parsed_hashtags:
-                    for tag in conversation_tags[1]:
-                        if tag not in hashtags_dict:
-                            current_hashtag_id += 1
-                            hashtags_dict[tag] = current_hashtag_id
-                            parsed_unique_hashtags.append(
-                                (current_hashtag_id, tag))
-                            conversations_hashtags.append(
-                                (conversation_tags[0], current_hashtag_id))
-                        else:
-                            conversations_hashtags.append(
-                                (conversation_tags[0], hashtags_dict[tag]))
-
-                hashtags_args = ','.join(cur.mogrify(
-                    "(%s,%s)", x).decode("utf-8") for x in parsed_unique_hashtags)
-
-                if hashtags_args:
-                    cur.execute("INSERT INTO hashtags (id, tag) VALUES " +
-                                hashtags_args + ";")
-
-                conversations_hashtags_args = ','.join(cur.mogrify(
-                    "(%s,%s)", x).decode("utf-8") for x in conversations_hashtags)
-
-                if conversations_hashtags_args:
-                    cur.execute("INSERT INTO conversation_hashtags (id, tag) VALUES " +
-                                conversations_hashtags_args + ";")
+                                    links_args + "  ON CONFLICT DO NOTHING;")
 
                 for prt in parsed_referenced_tweets:
                     referenced_tweets_args = ','.join(cur.mogrify(
                         "(%s,%s,%s)", x).decode("utf-8") for x in prt)
                     if referenced_tweets_args:
                         cur.execute("INSERT INTO conversation_references (parent_id, type, conversation_id) VALUES " +
-                                    referenced_tweets_args + " ON CONFLICT DO NOTHING;")
+                                    referenced_tweets_args + "  ON CONFLICT DO NOTHING;")
+                
+                hashtags_args = ','.join(cur.mogrify(
+                        "(%s,%s)", x).decode("utf-8") for x in new_added_hashtags)
+
+                if hashtags_args:
+                    cur.execute("INSERT INTO hashtags (id, tag) VALUES " +
+                                hashtags_args + " ON CONFLICT DO NOTHING;")
+
+                conversations_hashtags_args = ','.join(cur.mogrify(
+                    "(%s,%s)", x).decode("utf-8") for x in new_added_hashtags_conversations)
+
+                if conversations_hashtags_args:
+                    cur.execute("INSERT INTO conversation_hashtags (conversation_id, hashtag_id) VALUES " +
+                                conversations_hashtags_args + " ON CONFLICT DO NOTHING;")
 
                 for pcad, pcae in zip(parsed_context_annotations_domains, parsed_context_annotations_entities):
                     context_annotations_domains_args = ','.join(cur.mogrify(
                         "(%s,%s,%s)", (x[0], x[1], x[2])).decode("utf-8") for x in pcad[0])
                     if context_annotations_domains_args:
                         cur.execute("INSERT INTO context_domains (id, name, description) VALUES " +
-                                    context_annotations_domains_args + " ON CONFLICT DO NOTHING;")
+                                    context_annotations_domains_args + "  ON CONFLICT DO NOTHING;")
                     context_annotations_entities_args = ','.join(cur.mogrify(
                         "(%s,%s,%s)", (x[0], x[1], x[2])).decode("utf-8") for x in pcae[0])
                     if context_annotations_entities_args:
                         cur.execute("INSERT INTO context_entities (id, name, description) VALUES " +
-                                    context_annotations_entities_args + " ON CONFLICT DO NOTHING;")
+                                    context_annotations_entities_args + "  ON CONFLICT DO NOTHING;")
 
                     values = []
                     for a, b in zip(pcad[0], pcae[0]):
@@ -285,9 +261,10 @@ def parse_split(authors_ids):
                         "(%s,%s,%s)", x).decode("utf-8") for x in values)
                     if values_args:
                         cur.execute("INSERT INTO context_annotations (conversation_id, context_domain_id, context_entity_id) VALUES " +
-                                    values_args + " ON CONFLICT DO NOTHING;")
+                                    values_args + "  ON CONFLICT DO NOTHING;")
                 conn.commit()
                 logger.log()
+
     cur.close()
     conn.close()
 
