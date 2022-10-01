@@ -83,11 +83,6 @@ def parse_referenced_tweets(data):
             (referenced_tweet['id'], not_null_str(referenced_tweet['type']), data['id']))
     return referenced_tweets
 
-def get_next_author_id(author_ids, last_added_null_author_id):
-    for index in range(last_added_null_author_id, 9223372036854775807):
-        if index not in author_ids:
-            return index
-
 def parse_split(authors_ids):
     # Connect to an existing database
     conn = psycopg2.connect(
@@ -96,7 +91,6 @@ def parse_split(authors_ids):
     cur = conn.cursor()
     logger = Logger('report_file_conversations')
     hashtags_dict = dict()
-    last_added_null_author_id = 1
     with gzip.open('../conversations.jsonl.gz', 'r') as file:
         parsed_conversations = []
         parsed_annotations = []
@@ -117,16 +111,12 @@ def parse_split(authors_ids):
             hashtags = parse_hashtags(data)
             # existing foreign key on author_id
             if int(conversation[1]) not in authors_ids:
-                last_added_null_author_id = get_next_author_id(authors_ids, last_added_null_author_id)
                 authors_args = ','.join(cur.mogrify("(%s, %s, %s, %s, %s, %s, %s, %s)", x).decode(
-                    "utf-8") for x in [(last_added_null_author_id, None, None, None, None, None, None, None)])
+                    "utf-8") for x in [(conversation[1], None, None, None, None, None, None, None)])
                 if authors_args:
                     cur.execute("INSERT INTO authors (id, name, username, description, followers_count, following_count, tweet_count, listed_count) VALUES " +
                                 authors_args + " ON CONFLICT DO NOTHING;")
-                authors_ids.add(last_added_null_author_id)
-                conv_update = list(conversation)
-                conv_update[1] = last_added_null_author_id
-                conversation = tuple(conv_update)
+                authors_ids.add(conversation[1])
             if int(conversation[1]) in authors_ids:
                 parsed_conversations.append(conversation)
                 parsed_annotations.append(annotations)
