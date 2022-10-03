@@ -1,0 +1,6 @@
+conversations.jsonl.gz
+authors.jsonl.gz
+.vscode
+__pycache__
+*.pdf
+*.jpg
