@@ -1,0 +1,2 @@
+-- select parent_id as diff_parent_id from conversation_references except select id from conversations;
+-- delete from conversation_references where id in (select id from conversation_references inner join (select distinct parent_id as diff_parent_id from conversation_references except select id from conversations) as diff on diff.diff_parent_id = conversation_references.parent_id)
