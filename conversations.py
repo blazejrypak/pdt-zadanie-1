@@ -25,9 +25,9 @@ def parse_links(data):
     urls = data.get('entities', {}).get('urls', [])
     links = []
     for url in urls:
-        if url.get('url', None):
-            if (len(url['url']) <= 2048):
-                links.append((url['url'], url.get('title', None),
+        if url.get('expanded_url', None):
+            if (len(url['expanded_url']) <= 2048):
+                links.append((url['expanded_url'], url.get('title', None),
                               url.get('description', None), data['id']))
     return links
 
