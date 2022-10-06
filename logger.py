@@ -19,7 +19,7 @@ class Logger:
             seconds = timedelta - (minutes*60)
             minutes_str = '0' + str(minutes) if minutes < 10 else minutes
             seconds_str = '0' + str(seconds) if seconds < 10 else seconds
-            msg = f'{dt.now().isoformat()};{minutes_str}:{seconds_str};{elapsed_time_block.strftime("%M:%S")}\n'
+            msg = f'{dt.now().isoformat()}Z;{minutes_str}:{seconds_str};{elapsed_time_block.strftime("%M:%S")}\n'
             f.write(msg)
             self.start_block = time.time()
             f.flush()
