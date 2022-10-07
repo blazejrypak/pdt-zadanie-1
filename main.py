@@ -3,7 +3,7 @@ from conversations import load_conversations
 
 
 def main():
-    # load_authors()
+    load_authors()
     load_conversations()
 
 
